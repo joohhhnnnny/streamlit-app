@@ -3,4 +3,5 @@ tensorflow-cpu==2.15.0
 numpy==1.24.0
 pillow==10.1.0
 opencv-python-headless==4.8.1.78
-ultralytics==8.1.0
+torch==2.2.0
+ultralytics==8.1.30
