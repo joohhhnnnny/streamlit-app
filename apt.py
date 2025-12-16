@@ -33,7 +33,7 @@ model_choice = st.sidebar.radio(
 )
 
 MODEL_PATHS = {
-    "MobileNetV2": "models/mobilenetv2.keras",
+    "MobileNetV2": "models/mobilenetv2.h5",
     "YOLOv8": "models/best-yolov8s-v2.pt"
 }
 
