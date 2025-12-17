@@ -1,181 +1,161 @@
 import streamlit as st
 import tensorflow as tf
+from tensorflow.keras.applications import MobileNetV2
+from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
+from ultralytics import YOLO
 from PIL import Image, ImageOps
 import numpy as np
+import cv2
 
+# =============================
 # PAGE CONFIG
+# =============================
 st.set_page_config(
     page_title="Human vs Non-Human Detector",
     page_icon="👤",
     layout="wide"
 )
 
-# SIDEBAR THEME SELECTION
-st.sidebar.header("Appearance")
-theme = st.sidebar.radio("Choose theme:", ["Light ☀️", "Dark 🌙"], index=0)
-
-# THEME COLORS
-if theme == "Light ☀️":
-    primary_bg = "#eef1f6"
-    card_bg = "#ffffff"
-    text_color = "#1c2333"
-    title_color = "#1c2333"
-    button_bg1 = "#4A73FF"
-    button_bg2 = "#3358E0"
-    preview_bg = "#f9fafc"
-    progress_color = "#4A73FF"
-else:
-    primary_bg = "#0f1116"
-    card_bg = "#1a1c23"
-    text_color = "#e5e7eb"
-    title_color = "#ffffff"
-    button_bg1 = "#6366f1"
-    button_bg2 = "#4f46e5"
-    preview_bg = "#111317"
-    progress_color = "#6366f1"
-
-# CSS STYLING
-st.markdown(f"""
-<style>
-
-html, body, [class*="css"] {{
-    font-family: 'Inter', sans-serif;
-}}
-
-.stApp {{
-    background-color: {primary_bg};
-}}
-
-/* FIX — force title color change in dark mode */
-h1.main-title, .main-title, .main-title h1 {{
-    color: {title_color} !important;
-    text-align: center !important;
-    padding-top: 20px;
-}}
-
-.card {{
-    background: {card_bg};
-    padding: 25px 30px;
-    border-radius: 16px;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.25);
-    margin-bottom: 25px;
-    color: {text_color};
-}}
-
-.stButton>button {{
-    width: 100%;
-    background: linear-gradient(135deg, {button_bg1}, {button_bg2});
-    color: white;
-    border-radius: 10px;
-    padding: 10px;
-    border: none;
-    font-weight: 600;
-    transition: 0.2s ease-in-out;
-}}
-
-.stButton>button:hover {{
-    transform: scale(1.03);
-    background: linear-gradient(135deg, {button_bg2}, {button_bg1});
-}}
-
-.preview-box {{
-    border: 2px dashed #4d5561;
-    border-radius: 16px;
-    padding: 12px;
-    background: {preview_bg};
-}}
-
-h2, h3, label, p, span, .stMetric {{
-    color: {text_color} !important;
-}}
-
-/* Transparent sidebar */
-[data-testid="stSidebar"], .stSidebar {{
-    background: rgba(0,0,0,0) !important;
-    box-shadow: none !important;
-}}
-
-.stProgress > div > div > div > div {{
-    background-color: {progress_color};
-}}
-
-/* Section divider fix */
-.section-divider {{
-    margin: 20px 0;
-    border-top: 1px solid #4d5561;
-}}
-
-</style>
-""", unsafe_allow_html=True)
-
-# PAGE TITLE
+# =============================
+# TITLE
+# =============================
 st.markdown("<h1 class='main-title'>Human vs Non-Human Detector</h1>", unsafe_allow_html=True)
-st.write("This AI checks if your photo contains a human. Friendly, fast, and surprisingly honest.")
-st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
+st.write("Upload an image and let AI decide if it contains a human face or not.")
+st.markdown("---")
 
-# MODEL SELECTION SIDEBAR
+# =============================
+# MODEL SELECTION
+# =============================
 st.sidebar.header("Model Selection")
 
 model_choice = st.sidebar.radio(
-    "Choose which AI model to use:",
-    ["MobileNetV2", "YoloV8"],
+    "Choose AI model:",
+    ["MobileNetV2", "YOLOv8"],
     index=0
 )
 
 MODEL_PATHS = {
-    "MobileNetV2": "human_classifier_model.keras",
-    "YoloV8": "human_classifier_yolov8.keras" #FOR THE CHAR
+    "YOLOv8": "models/best-yolov8s-v2.pt"
 }
 
+# =============================
+# MODEL LOADERS
+# =============================
 @st.cache_resource
-def load_selected_model(model_path):
-    return tf.keras.models.load_model(model_path)
+def load_mobilenet():
+    """Load MobileNetV2 directly from Keras applications with ImageNet weights."""
+    return MobileNetV2(weights='imagenet', include_top=True)
+
+@st.cache_resource
+def load_yolo(path):
+    return YOLO(path)
 
 with st.spinner(f"Loading {model_choice}..."):
     try:
-        model = load_selected_model(MODEL_PATHS[model_choice])
+        if model_choice == "MobileNetV2":
+            model = load_mobilenet()
+        else:
+            model = load_yolo(MODEL_PATHS["YOLOv8"])
     except Exception as e:
-        st.error(f"Error loading model: {e}")
+        st.error(f"Model loading failed: {e}")
         st.stop()
 
-# FIXED CONFIDENCE THRESHOLD (since slider removed)
-confidence_threshold = 0.70
+# =============================
+# PREDICTION FUNCTIONS
+# =============================
+CONFIDENCE_THRESHOLD = 0.70
 
-# PREDICTION FUNCTION
-def import_and_predict(image_data, model):
-    image_data = image_data.convert("RGB")
-
-    size = (224, 224)
-    image = ImageOps.fit(image_data, size, Image.Resampling.LANCZOS)
+def mobilenet_predict(image, model):
+    image = image.convert("RGB")
+    image = ImageOps.fit(image, (224, 224), Image.Resampling.LANCZOS)
     img = np.asarray(image)
+    img = np.expand_dims(img, axis=0)
+    img = preprocess_input(img)
+    preds = model.predict(img)
+    prob = preds[0].max()  # highest class probability
+    return prob  # probability of top predicted class
 
-    img = img / 255.0
-    img_reshape = np.expand_dims(img, axis=0)
+def yolo_detect_and_draw(image, model):
+    img = np.array(image)
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    results = model(img)
+    boxes = results[0].boxes
 
-    prediction = model.predict(img_reshape)
-    return prediction
+    if boxes is None or len(boxes) == 0:
+        return img, 0
 
-# MAIN UI
+    h_img, w_img = img.shape[:2]
+    scale = max(w_img, h_img) / 1000
+    box_thickness = max(2, int(scale * 3))
+    text_thickness = max(2, int(scale * 2))
+    font_scale = max(0.6, scale * 0.7)
+
+    person_count = 0
+    for box in boxes:
+        cls_id = int(box.cls[0])
+        conf = float(box.conf[0])
+        if cls_id == 0:  # class 0 = person
+            person_count += 1
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            label = f"Human {conf:.2%}"
+
+            # Draw bounding box
+            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), box_thickness)
+
+            # Text size
+            (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_thickness)
+
+            # Decide label position
+            if y1 - h - 10 > 0:
+                label_y1 = y1 - h - 10
+                label_y2 = y1
+                text_y = y1 - 5
+            else:
+                label_y1 = y1 + 5
+                label_y2 = y1 + h + 15
+                text_y = y1 + h + 10
+
+            # Draw label background
+            cv2.rectangle(
+                img,
+                (x1, label_y1),
+                (x1 + w + 6, label_y2),
+                (0, 255, 0),
+                -1
+            )
+
+            # Draw label text
+            cv2.putText(
+                img,
+                label,
+                (x1 + 3, text_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale,
+                (0, 0, 0),
+                text_thickness,
+                cv2.LINE_AA
+            )
+
+    return img, person_count
+
+# =============================
+# UI
+# =============================
 st.markdown("<div class='card'>", unsafe_allow_html=True)
-file = st.file_uploader("Upload a photo", type=["jpg", "png", "jpeg"])
+file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
 st.markdown("</div>", unsafe_allow_html=True)
 
-if file is None:
-    st.info("Upload a photo to begin.")
-else:
+if file:
+    image = Image.open(file)
+
     col1, col2 = st.columns(2, gap="large")
 
     with col1:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.subheader("Uploaded Image")
-
-        image = Image.open(file)
-
         st.markdown("<div class='preview-box'>", unsafe_allow_html=True)
-        st.image(image, use_column_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.image(image, width=600)
+        st.markdown("</div></div>", unsafe_allow_html=True)
 
     with col2:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
@@ -183,19 +163,28 @@ else:
 
         if st.button("Analyze Image"):
             with st.spinner("Analyzing..."):
-
-                predictions = import_and_predict(image, model)
-                probability = predictions[0][0]
-
-                is_human_prob = 1 - probability
-
-                if is_human_prob > confidence_threshold:
-                    st.success("Result: HUMAN 👤")
-                    st.metric("Confidence", f"{is_human_prob:.2%}")
-                    st.progress(int(is_human_prob * 100))
+                if model_choice == "MobileNetV2":
+                    prob = mobilenet_predict(image, model)
+                    if prob >= CONFIDENCE_THRESHOLD:
+                        st.success("Result: HUMAN 👤")
+                        st.metric("Confidence", f"{prob:.2%}")
+                        st.progress(int(prob * 100))
+                    else:
+                        st.error("Result: NON-HUMAN 🚫")
+                        st.metric("Confidence", f"{(1 - prob):.2%}")
+                        st.progress(int((1 - prob) * 100))
                 else:
-                    st.error("Result: NON-HUMAN 🚫")
-                    st.metric("Confidence", f"{(1 - is_human_prob):.2%}")
-                    st.progress(int((1 - is_human_prob) * 100))
+                    annotated_img, person_count = yolo_detect_and_draw(image, model)
+                    annotated_img = cv2.cvtColor(annotated_img, cv2.COLOR_BGR2RGB)
+
+                    st.subheader("Detection Result")
+                    if person_count > 0:
+                        st.success(f"Detected {person_count} human(s)")
+                    else:
+                        st.warning("No humans detected")
+
+                    st.image(annotated_img, width=600)
 
         st.markdown("</div>", unsafe_allow_html=True)
+else:
+    st.info("Upload an image to begin.")
