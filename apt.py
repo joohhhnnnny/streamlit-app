@@ -1,8 +1,5 @@
 import streamlit as st
 import tensorflow as tf
-from tensorflow.keras.applications import MobileNetV2
-from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
-from ultralytics import YOLO
 from PIL import Image, ImageOps
 import numpy as np
 import cv2
@@ -35,6 +32,7 @@ model_choice = st.sidebar.radio(
 )
 
 MODEL_PATHS = {
+    "MobileNetV2": "models/mobilenetv2.h5",
     "YOLOv8": "models/best-yolov8s-v2.pt"
 }
 
@@ -42,18 +40,18 @@ MODEL_PATHS = {
 # MODEL LOADERS
 # =============================
 @st.cache_resource
-def load_mobilenet():
-    """Load MobileNetV2 directly from Keras applications with ImageNet weights."""
-    return MobileNetV2(weights='imagenet', include_top=True)
+def load_mobilenet(path):
+    return tf.keras.models.load_model(path)
 
 @st.cache_resource
 def load_yolo(path):
+    from ultralytics import YOLO
     return YOLO(path)
 
 with st.spinner(f"Loading {model_choice}..."):
     try:
         if model_choice == "MobileNetV2":
-            model = load_mobilenet()
+            model = load_mobilenet(MODEL_PATHS["MobileNetV2"])
         else:
             model = load_yolo(MODEL_PATHS["YOLOv8"])
     except Exception as e:
@@ -68,12 +66,10 @@ CONFIDENCE_THRESHOLD = 0.70
 def mobilenet_predict(image, model):
     image = image.convert("RGB")
     image = ImageOps.fit(image, (224, 224), Image.Resampling.LANCZOS)
-    img = np.asarray(image)
+    img = np.asarray(image) / 255.0
     img = np.expand_dims(img, axis=0)
-    img = preprocess_input(img)
-    preds = model.predict(img)
-    prob = preds[0].max()  # highest class probability
-    return prob  # probability of top predicted class
+    pred = model.predict(img)[0][0]
+    return 1 - pred  # human probability
 
 def yolo_detect_and_draw(image, model):
     img = np.array(image)
@@ -94,7 +90,7 @@ def yolo_detect_and_draw(image, model):
     for box in boxes:
         cls_id = int(box.cls[0])
         conf = float(box.conf[0])
-        if cls_id == 0:  # class 0 = person
+        if cls_id == 0:
             person_count += 1
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             label = f"Human {conf:.2%}"
